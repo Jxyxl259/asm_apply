@@ -2,8 +2,12 @@ package com.jiang.propcopy.utils;
 
 import com.esotericsoftware.reflectasm.MethodAccess;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,8 +26,9 @@ public class BeanCopyUtil {
 
     private static Map<String,MethodAccess> clzNameMethodAccessMappingCache = new ConcurrentHashMap<>();
 
-    private static Map<String,List<String>> clzNameMethodMappingCache = new ConcurrentHashMap<>();
+    private static Map<String,Integer> methodNameCache = new ConcurrentHashMap<>();
 
+    private static Map<String,List<String>> clzNameFeildMappingCache = new ConcurrentHashMap<>();
 
     /**
      * 使用高性能反射 ReflectASM
@@ -40,30 +45,57 @@ public class BeanCopyUtil {
 
         MethodAccess sourceMethodAccess = getMethodAccess(sourceClass);
 
-        List<String> sourceMethodNameList = clzNameMethodMappingCache.get(sourceClassName);
-
-        if(CollectionUtils.isEmpty(sourceMethodNameList)) {
-            sourceMethodNameList = cacheClzNameMethodMapping(sourceClassName, sourceMethodAccess);
-        }
-
         Class<?> targetClass = target.getClass();
         String targetClassName = targetClass.getName();
 
         MethodAccess targetMethodAccess = getMethodAccess(targetClass);
 
-        List<String> targetMethodNameList = clzNameMethodMappingCache.get(targetClassName);
+        List<String> targetFeildList = clzNameFeildMappingCache.get(targetClassName);
 
-        if(CollectionUtils.isEmpty(targetMethodNameList)) {
-            targetMethodNameList = cacheClzNameMethodMapping(targetClassName, targetMethodAccess);
+        if(CollectionUtils.isEmpty(targetFeildList)){
+            targetFeildList = new ArrayList<>();
+            getAllField(targetClass, targetFeildList);
+            clzNameFeildMappingCache.put(targetClassName, targetFeildList);
         }
 
-        for(String targetMethodName : targetMethodNameList){
-            if(SET_METHOD_PRIFIX.equals(targetMethodName.substring(0,3))
-                    && sourceMethodNameList.contains(targetMethodName)){
-                targetMethodAccess.invoke(target, targetMethodName,
-                        sourceMethodAccess.invoke(source, GET_METHOD_PRIFIX + targetMethodName.substring(3, targetMethodName.length())));
+
+
+        /** 将 源对象中有的属性进行copy */
+        for(String targetFeildName : targetFeildList){
+            // 目标对象的属性
+            String getMethod = sourceClassName + "." + GET_METHOD_PRIFIX + StringUtils.capitalize(targetFeildName);
+            Integer getMethodIndex = methodNameCache.get(getMethod);
+            if(getMethodIndex != null) {
+                String setMethod = targetClassName + "." + SET_METHOD_PRIFIX + StringUtils.capitalize(targetFeildName);
+                Integer setMethodIndex = methodNameCache.get(setMethod);
+                targetMethodAccess.invoke(target, setMethodIndex, sourceMethodAccess.invoke(source, getMethodIndex));
             }
         }
+    }
+
+    /**
+     * 递归获得目标对象的所有（包括父类中的）私有非静态属性
+     * @param clz
+     * @param Field
+     * @return
+     */
+    private static List<String> getAllField(Class clz, List<String> Field){
+
+        Field[] fields = clz.getDeclaredFields();
+        for(Field f : fields){
+            if(Modifier.isPrivate(f.getModifiers())
+                    && !Modifier.isStatic(f.getModifiers())) {
+                String fName = f.getName();
+                Field.add(fName);
+            }
+        }
+
+        Class superclass = clz.getSuperclass();
+
+        if(superclass != null){
+            getAllField(superclass,Field);
+        }
+        return Field;
     }
 
     /**
@@ -76,22 +108,16 @@ public class BeanCopyUtil {
         if(methodAccess == null) {
             methodAccess = MethodAccess.get(clz);
             clzNameMethodAccessMappingCache.put(clz.getName(), methodAccess);
+
+            String clzName = clz.getName();
+            String[] methodNames = methodAccess.getMethodNames();
+            for(String methodSimpleName : methodNames){
+                String methodFullName = clzName + "." + methodSimpleName;
+                methodNameCache.put(methodFullName, methodAccess.getIndex(methodSimpleName));
+            }
         }
         return methodAccess;
     }
 
 
-    private static List<String> cacheClzNameMethodMapping(String clzName, MethodAccess access){
-
-        String[] methodNameArr = access.getMethodNames();
-        List<String> methodNameList = new ArrayList<>(methodNameArr.length);
-        for (String methodName : methodNameArr) {
-            if (GET_METHOD_PRIFIX.equals(methodName.substring(0, 3))
-                    || SET_METHOD_PRIFIX.equals(methodName.substring(0, 3))) {
-                methodNameList.add(methodName);
-            }
-            clzNameMethodMappingCache.put(clzName, methodNameList);
-        }
-        return methodNameList;
-    }
 }
